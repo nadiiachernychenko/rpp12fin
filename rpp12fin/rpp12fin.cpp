@@ -1,6 +1,8 @@
 #include <iostream>
 #include <cstdlib>
 #include <mpi.h>
+#include <vector>
+#include <fstream>
 
 using namespace std;
 
@@ -16,16 +18,16 @@ bool isPrime(long long n) {
     return true;
 }
 
-long long countPrimes(long long start, long long end) {
-    long long count = 0;
+vector<long long> findPrimes(long long start, long long end) {
+    vector<long long> primes;
 
     for (long long i = start; i <= end; i++) {
         if (isPrime(i)) {
-            count++;
+            primes.push_back(i);
         }
     }
 
-    return count;
+    return primes;
 }
 
 int main(int argc, char* argv[]) {
@@ -38,7 +40,7 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     long long globalStart = 1;
-    long long globalEnd = 10000;
+    long long globalEnd = 100;
 
     if (argc >= 3) {
         globalStart = atoll(argv[1]);
@@ -64,16 +66,45 @@ int main(int argc, char* argv[]) {
     MPI_Barrier(MPI_COMM_WORLD);
     double startTime = MPI_Wtime();
 
-    long long localCount = countPrimes(localStart, localEnd);
+    vector<long long> localPrimes = findPrimes(localStart, localEnd);
 
-    long long globalCount = 0;
+    int localCount = static_cast<int>(localPrimes.size());
 
-    MPI_Reduce(
+    vector<int> recvCounts(size);
+    vector<int> displs(size);
+
+    MPI_Gather(
         &localCount,
-        &globalCount,
         1,
+        MPI_INT,
+        recvCounts.data(),
+        1,
+        MPI_INT,
+        0,
+        MPI_COMM_WORLD
+    );
+
+    vector<long long> allPrimes;
+
+    if (rank == 0) {
+        int totalPrimeCount = 0;
+
+        for (int i = 0; i < size; i++) {
+            displs[i] = totalPrimeCount;
+            totalPrimeCount += recvCounts[i];
+        }
+
+        allPrimes.resize(totalPrimeCount);
+    }
+
+    MPI_Gatherv(
+        localPrimes.data(),
+        localCount,
         MPI_LONG_LONG,
-        MPI_SUM,
+        allPrimes.data(),
+        recvCounts.data(),
+        displs.data(),
+        MPI_LONG_LONG,
         0,
         MPI_COMM_WORLD
     );
@@ -82,9 +113,24 @@ int main(int argc, char* argv[]) {
     double endTime = MPI_Wtime();
 
     if (rank == 0) {
-        cout << "Number of primes in range ["
-            << globalStart << "; " << globalEnd << "] = "
-            << globalCount << endl;
+        ofstream file("primes.txt");
+
+        if (file.is_open()) {
+            for (long long prime : allPrimes) {
+                file << prime << endl;
+            }
+
+            file.close();
+
+            cout << "Number of primes in range ["
+                << globalStart << "; " << globalEnd << "] = "
+                << allPrimes.size() << endl;
+
+            cout << "All primes were written to primes.txt" << endl;
+        }
+        else {
+            cout << "Error: cannot open file primes.txt" << endl;
+        }
 
         cout << "Execution time: " << endTime - startTime << " s" << endl;
         cout << "Number of processes: " << size << endl;
